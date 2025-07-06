@@ -10,8 +10,25 @@ class Store {
             users: JSON.parse(localStorage.getItem('trx_users')) || [],
             bets: JSON.parse(localStorage.getItem('trx_bets')) || [],
             lottery: {
-    day: localStorage.getItem('trx_global_winner_day') || null,
-    night: localStorage.getItem('trx_global_winner_night') || null,
+    day: null,
+    night: null,
+},
+
+initLotteryFromBin() {
+    fetch("https://api.jsonbin.io/v3/b/686aab8a8561e97a50328827/latest", {
+        headers: {
+            "X-Master-Key": "$2a$10$gDl28D2bxEjJkd0Gna5ZkOcZ84PFa..MxyaUp1H/jy5hPzY/VNyQK"
+        }
+    })
+    .then(res => res.json())
+    .then(data => {
+        this.state.lottery.day = data.record.day;
+        this.state.lottery.night = data.record.night;
+        app.render(); // actualiza interfaz visual
+    })
+    .catch(() => {
+        showToast("Error al cargar los ganadores", "error");
+    });
 },
             theme: localStorage.getItem('trx_theme') || 'dark',
             pendingDeposits: JSON.parse(localStorage.getItem('trx_pending_deposits')) || [],
@@ -136,10 +153,26 @@ class Store {
     
     // --- Admin Actions ---
     setWinningNumber(draw, number) {
-        this.state.lottery[draw] = number;
-localStorage.setItem('trx_global_winner_' + draw, number); // Guardar globalmente
-        const today = new Date().toISOString().split('T')[0];
+    this.state.lottery[draw] = number;
 
+    fetch("https://api.jsonbin.io/v3/b/686aab8a8561e97a50328827", {
+        method: "PUT",
+        headers: {
+            "Content-Type": "application/json",
+            "X-Master-Key": "$2a$10$gDl28D2bxEjJkd0Gna5ZkOcZ84PFa..MxyaUp1H/jy5hPzY/VNyQK"
+        },
+        body: JSON.stringify(this.state.lottery)
+    })
+    .then(() => {
+        const today = new Date().toISOString().split('T')[0];
+        this.processBetsForDraw(draw, number, today);
+        this._commit();
+        showToast(`Número ganador (${draw}) actualizado para todos.`, 'success');
+    })
+    .catch(() => {
+        showToast('Error al guardar en JSONBin', 'error');
+    });
+}
         // Process bets
         this.processBetsForDraw(draw, number, today);
         
