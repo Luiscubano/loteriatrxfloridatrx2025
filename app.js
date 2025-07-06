@@ -9,10 +9,10 @@ class Store {
             currentUser: null,
             users: JSON.parse(localStorage.getItem('trx_users')) || [],
             bets: JSON.parse(localStorage.getItem('trx_bets')) || [],
-            lottery: JSON.parse(localStorage.getItem('trx_lottery')) || {
-                day: null,
-                night: null,
-            },
+            lottery: {
+    day: localStorage.getItem('trx_global_winner_day') || null,
+    night: localStorage.getItem('trx_global_winner_night') || null,
+},
             theme: localStorage.getItem('trx_theme') || 'dark',
             pendingDeposits: JSON.parse(localStorage.getItem('trx_pending_deposits')) || [],
             pendingWithdrawals: JSON.parse(localStorage.getItem('trx_pending_withdrawals')) || [],
@@ -137,25 +137,31 @@ class Store {
     // --- Admin Actions ---
     setWinningNumber(draw, number) {
         this.state.lottery[draw] = number;
+localStorage.setItem('trx_global_winner_' + draw, number); // Guardar globalmente
         const today = new Date().toISOString().split('T')[0];
+
+        // Process bets
+        this.processBetsForDraw(draw, number, today);
         
+        this._commit();
+        showToast(`Número ganador (${draw}) establecido. Premios pagados.`, 'success');
+    }
+
+    processBetsForDraw(draw, winningNumber, date) {
         // Find bets for this draw and date
-        const relevantBets = this.state.bets.filter(b => b.draw === draw && b.date === today && b.status === 'pending');
+        const relevantBets = this.state.bets.filter(b => b.draw === draw && b.date === date && b.status === 'pending');
         
         relevantBets.forEach(bet => {
             const user = this.state.users.find(u => u.id === bet.userId);
             if (!user) return;
 
-            if (bet.number === number) {
+            if (bet.number === winningNumber) {
                 bet.status = 'win';
                 user.balance += bet.amount * 10;
             } else {
                 bet.status = 'loss';
             }
         });
-        
-        this._commit();
-        showToast(`Número ganador (${draw}) establecido. Premios pagados.`, 'success');
     }
 
     requestDeposit(amount) {
@@ -169,7 +175,7 @@ class Store {
         };
         this.state.pendingDeposits.push(depositRequest);
         this._commit();
-        alert(`--- INSTRUCCIONES DE DEPÓSITO ---\n\nPara completar su depósito, por favor siga estos pasos:\n\n1. Envíe exactamente ${amount} TRX a la siguiente dirección de billetera:\n\n   TAGfZz78D9ekTc7bX3VT4XtuEPCvab1cCK\n\n2. Una vez enviado, el administrador verificará la transacción.\n\n3. Su saldo se actualizará tan pronto como el depósito sea confirmado. Este es un proceso manual y puede tomar algún tiempo.\n\nGracias por su paciencia.`);
+        // The alert will be replaced by a modal in the UI layer (App class)
     }
 
     confirmDeposit(depositId) {
@@ -233,6 +239,7 @@ class App {
     constructor(store) {
         this.store = store;
         this.root = document.getElementById('app');
+        this.modal = { isOpen: false, title: '', content: html`` };
         this.init();
     }
     
@@ -248,6 +255,16 @@ class App {
             this.store.setCurrentPage('login');
         }
         
+        this.render();
+    }
+    
+    showModal(title, content) {
+        this.modal = { isOpen: true, title, content };
+        this.render();
+    }
+
+    closeModal() {
+        this.modal = { isOpen: false, title: '', content: html`` };
         this.render();
     }
     
@@ -316,6 +333,23 @@ class App {
                     const amount = parseFloat(prompt('¿Cuánto TRX desea depositar?', '10'));
                     if (!isNaN(amount) && amount > 0) {
                         this.store.requestDeposit(amount);
+
+                        const adminWallet = 'TAGfZz78D9ekTc7bX3VT4XtuEPCvab1cCK';
+                        const modalContent = html`
+                            <h4>Paso 1: Enviar Fondos</h4>
+                            <p>Envíe exactamente <strong>${amount} TRX</strong> a la siguiente dirección de billetera:</p>
+                            <div class="copy-container">
+                                <input type="text" readonly value="${adminWallet}" id="deposit-address">
+                                <button class="btn" data-action="copy-text" data-text="${adminWallet}" @click=${e => this.handleEvent(e)}>
+                                    <i class="far fa-copy"></i> Copiar
+                                </button>
+                            </div>
+                            <p style="margin-top: 1rem;"><strong>IMPORTANTE:</strong> Su solicitud de depósito ha sido registrada. Una vez que realice la transferencia, el administrador la confirmará y su saldo será actualizado. No necesita hacer clic en ningún otro botón.</p>
+                            <br>
+                            <button class="btn btn-primary" data-action="close-modal" @click=${e => this.handleEvent(e)}>Entendido</button>
+                        `;
+                        this.showModal('Instrucciones de Depósito', modalContent);
+
                     } else {
                         showToast('Monto inválido.', 'error');
                     }
@@ -340,6 +374,17 @@ class App {
                     break;
                 case 'complete-withdrawal':
                     this.store.completeWithdrawal(parseInt(target.dataset.id));
+                    break;
+                case 'copy-text':
+                    navigator.clipboard.writeText(target.dataset.text).then(() => {
+                        showToast('Copiado al portapapeles', 'info');
+                    }).catch(err => {
+                        showToast('Error al copiar', 'error');
+                        console.error('Failed to copy text: ', err);
+                    });
+                    break;
+                case 'close-modal':
+                    this.closeModal();
                     break;
             }
         }
@@ -599,12 +644,17 @@ class App {
                 <div class="card">
                     <h3><i class="fas fa-arrow-up"></i> Retiros Pendientes</h3>
                      ${this.adminTableTpl(
-                         this.store.state.pendingWithdrawals,
+                         this.store.state.pendingWithdrawals.filter(w => w.status === 'pending'),
                          ['Usuario', 'Monto', 'Dirección TRX', 'Acción'],
                          (item) => html`
                             <td>${item.username}</td>
                             <td>${item.amount} TRX</td>
-                            <td>${item.trxAddress}</td>
+                            <td class="copy-cell">
+                                <span>${item.trxAddress}</span>
+                                <button class="btn-copy" data-action="copy-text" data-text="${item.trxAddress}" @click=${e => this.handleEvent(e)}>
+                                    <i class="far fa-copy" data-action="copy-text" data-text="${item.trxAddress}"></i>
+                                </button>
+                            </td>
                             <td><button class="btn" data-action="complete-withdrawal" data-id=${item.id} @click=${e => this.handleEvent(e)}><i class="fas fa-check"></i> Completar</button></td>
                          `
                      )}
@@ -665,6 +715,7 @@ class App {
 
     render() {
         const tpl = html`
+            ${this.modalTpl()}
             ${this.loginPageTpl()}
             ${this.registerPageTpl()}
             ${this.dashboardPageTpl()}
@@ -673,6 +724,24 @@ class App {
         `;
         render(tpl, this.root);
         this.updateTimers();
+    }
+    
+    modalTpl() {
+        const { isOpen, title, content } = this.modal;
+        if (!isOpen) return '';
+        return html`
+            <div id="modal-overlay" @click=${e => { if (e.target.id === 'modal-overlay') this.closeModal() }}>
+                <div class="modal-content">
+                    <header class="modal-header">
+                        <h3>${title}</h3>
+                        <button class="close-button" data-action="close-modal" @click=${e => this.handleEvent(e)}>&times;</button>
+                    </header>
+                    <div class="modal-body">
+                        ${content}
+                    </div>
+                </div>
+            </div>
+        `;
     }
     
     updateTimers() {
