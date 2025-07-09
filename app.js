@@ -1,376 +1,200 @@
 import { html, render } from 'lit-html';
 import { unsafeHTML } from 'lit-html/directives/unsafe-html.js';
-// === GITHUB COMO BASE DE DATOS ===
-const GITHUB_TOKEN = "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";
-const REPO_OWNER = "Luiscubano";
-const REPO_NAME = "gabriel-loteria-2025";
-
-const apiHeaders = {
-  Authorization: `Bearer ${GITHUB_TOKEN}`,
-  Accept: "application/vnd.github.v3+json",
-  "Content-Type": "application/json"
-};
-
-async function getGitHubFile(filePath) {
-  const res = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${filePath}`, {
-    headers: apiHeaders
-  });
-  if (!res.ok) throw new Error("Error al leer " + filePath);
-  const data = await res.json();
-  const content = atob(data.content);
-  return { data: JSON.parse(content), sha: data.sha };
-}
-
-async function updateGitHubFile(filePath, contentObj, sha, mensaje = "Actualizar archivo") {
-  const encodedContent = btoa(JSON.stringify(contentObj, null, 2));
-  const body = {
-    message: mensaje,
-    content: encodedContent,
-    sha: sha
-  };
-  const res = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${filePath}`, {
-    method: "PUT",
-    headers: apiHeaders,
-    body: JSON.stringify(body)
-  });
-  return await res.json();
-}
-
-const githubKeyMap = {
-  'trx_users': 'data/users.json',
-  'trx_bets': 'data/bets.json',
-  'trx_global_winner_day': 'data/numeros.json',
-  'trx_global_winner_night': 'data/numeros.json',
-  'trx_pending_deposits': 'data/depositos.json',
-  'trx_pending_withdrawals': 'data/retiros.json',
-};
-
-async function githubGet(key) {
-  const path = githubKeyMap[key];
-  const { data } = await getGitHubFile(path);
-  if (key.includes('day')) return data.day;
-  if (key.includes('night')) return data.night;
-  return data;
-}
-
-async function githubSet(key, value) {
-  const path = githubKeyMap[key];
-  const current = await getGitHubFile(path);
-  let newData = value;
-  if (key.includes('day') || key.includes('night')) {
-    newData = {
-      ...current.data,
-      [key.includes('day') ? 'day' : 'night']: value
-    };
-  }
-  return await updateGitHubFile(path, newData, current.sha, `Actualizar ${key}`);
-}
-
 
 // --- STATE MANAGEMENT & MOCK DATABASE ---
 class Store {
-  constructor() {
-    this.state = {
-      currentPage: 'login',
-      currentUser: null,
-      users: [],
-      bets: [],
-      lottery: {
-        day: null,
-        night: null,
-      },
-      theme: 'dark',
-      pendingDeposits: [],
-      pendingWithdrawals: []
-    };
-
-    this.init(); // Cargamos los datos desde GitHub al iniciar
-  }
-
-  async init() {
-    try {
-      this.state.users = await githubGet('trx_users') || [];
-      this.state.bets = await githubGet('trx_bets') || [];
-      this.state.lottery.day = await githubGet('trx_global_winner_day') || null;
-      this.state.lottery.night = await githubGet('trx_global_winner_night') || null;
-      this.state.pendingDeposits = await githubGet('trx_pending_deposits') || [];
-      this.state.pendingWithdrawals = await githubGet('trx_pending_withdrawals') || [];
-
-      // Opcional: si deseas conservar el tema local
-      this.state.theme = localStorage.getItem('trx_theme') || 'dark';
-
-      // Refresca vista una vez cargado todo
-      app.render();
-
-    } catch (err) {
-      console.error("❌ Error cargando datos desde GitHub:", err);
+    constructor() {
+        this.state = {
+            currentPage: 'login', // login, register, dashboard, contact, admin
+            currentUser: null,
+            users: JSON.parse(localStorage.getItem('trx_users')) || [],
+            bets: JSON.parse(localStorage.getItem('trx_bets')) || [],
+            lottery: {
+    day: localStorage.getItem('trx_global_winner_day') || null,
+    night: localStorage.getItem('trx_global_winner_night') || null,
+},
+            theme: localStorage.getItem('trx_theme') || 'dark',
+            pendingDeposits: JSON.parse(localStorage.getItem('trx_pending_deposits')) || [],
+            pendingWithdrawals: JSON.parse(localStorage.getItem('trx_pending_withdrawals')) || [],
+        };
     }
-  }
-}
 
-
-    async _commit() {
-  try {
-    await githubSet('trx_users', this.state.users);
-    await githubSet('trx_bets', this.state.bets);
-    await githubSet('trx_global_winner_day', this.state.lottery.day);
-    await githubSet('trx_global_winner_night', this.state.lottery.night);
-    await githubSet('trx_pending_deposits', this.state.pendingDeposits);
-    await githubSet('trx_pending_withdrawals', this.state.pendingWithdrawals);
-
-    // El tema lo seguimos guardando en local
-    localStorage.setItem('trx_theme', this.state.theme);
-
-    app.render();
-  } catch (err) {
-    console.error("❌ Error al guardar en GitHub:", err);
-    showToast("Error al guardar en GitHub", "error");
-  }
-}
-
+    _commit() {
+        localStorage.setItem('trx_users', JSON.stringify(this.state.users));
+        localStorage.setItem('trx_bets', JSON.stringify(this.state.bets));
+        localStorage.setItem('trx_lottery', JSON.stringify(this.state.lottery));
+        localStorage.setItem('trx_theme', this.state.theme);
+        localStorage.setItem('trx_pending_deposits', JSON.stringify(this.state.pendingDeposits));
+        localStorage.setItem('trx_pending_withdrawals', JSON.stringify(this.state.pendingWithdrawals));
+        app.render();
+    }
     
+    // --- Page Navigation ---
     setCurrentPage(page) {
-  if (page === 'admin') {
-    const pin = prompt("Ingrese el PIN de administrador:");
-    
-    // Puedes cambiar el PIN aquí o incluso cargarlo desde GitHub si quieres luego
-    const correctPIN = "Luis850214#";
-
-    if (pin === correctPIN) {
-      this.state.currentPage = 'admin';
-    } else {
-      showToast('❌ PIN incorrecto', 'error');
-      return;
+        if (page === 'admin') {
+            const pin = prompt("Ingrese el PIN de administrador:");
+            if (pin === 'Luis850214#') {
+                this.state.currentPage = 'admin';
+            } else {
+                showToast('PIN incorrecto', 'error');
+                return;
+            }
+        } else {
+            this.state.currentPage = page;
+        }
+        app.render();
     }
-  } else {
-    this.state.currentPage = page;
-  }
-
-  app.render();
-}
-
 
     // --- User Management ---
-    async register(username, email, password, trxAddress, avatar) {
-  const users = await githubGet('trx_users');
+    register(username, email, password, trxAddress, avatar) {
+        if (this.state.users.find(u => u.email === email)) {
+            showToast('El correo electrónico ya está registrado.', 'error');
+            return false;
+        }
+        const newUser = {
+            id: Date.now(),
+            username,
+            email,
+            password, // In a real app, this would be hashed
+            trxAddress,
+            avatar,
+            balance: 0,
+        };
+        this.state.users.push(newUser);
+        this._commit();
+        showToast('Registro exitoso. Ahora puedes iniciar sesión.', 'success');
+        return true;
+    }
 
-  if (users.find(u => u.email === email)) {
-    showToast('El correo electrónico ya está registrado.', 'error');
-    return false;
-  }
-
-  const newUser = {
-    id: Date.now(),
-    username,
-    email,
-    password, // A futuro puedes aplicar hash
-    trxAddress,
-    avatar,
-    balance: 0
-  };
-
-  const updatedUsers = [...users, newUser];
-  await githubSet('trx_users', updatedUsers);
-
-  this.state.users = updatedUsers;
-  this.state.currentUser = newUser;
-  this.state.currentPage = 'dashboard';
-
-  await this._commit();
-  showToast('Registro exitoso. Ahora puedes iniciar sesión.', 'success');
-  return true;
-}
-
-
-    async login(email, password) {
-  const users = await githubGet('trx_users');
-
-  const user = users.find(u => u.email === email && u.password === password);
-  if (user) {
-    this.state.currentUser = user;
-    this.setCurrentPage('dashboard');
-    return true;
-  }
-
-  showToast('Correo electrónico o contraseña incorrectos.', 'error');
-  return false;
-}
-
+    login(email, password) {
+        const user = this.state.users.find(u => u.email === email && u.password === password);
+        if (user) {
+            this.state.currentUser = user;
+            this.setCurrentPage('dashboard');
+            return true;
+        }
+        showToast('Correo electrónico o contraseña incorrectos.', 'error');
+        return false;
+    }
 
     logout() {
         this.state.currentUser = null;
         this.setCurrentPage('login');
     }
     
-    async updateUser(updates) {
-  if (!this.state.currentUser) return;
-
-  const users = await githubGet('trx_users');
-
-  const index = users.findIndex(u => u.id === this.state.currentUser.id);
-  if (index !== -1) {
-    Object.assign(users[index], updates);
-    this.state.users = users;
-    this.state.currentUser = { ...users[index] };
-
-    await githubSet('trx_users', users);
-    await this._commit();
-  }
-}
-
-
-    async placeBet(number, amount, draw) {
-  if (!this.state.currentUser) return;
-
-  const now = new Date();
-  const hours = now.getHours();
-  const minutes = now.getMinutes();
-  const currentTime = hours * 60 + minutes;
-
-  const dayDrawCloseTime = 13 * 60 + 10;   // 1:10 PM
-  const nightDrawCloseTime = 20 * 60 + 10; // 8:10 PM
-
-  if (draw === 'day' && currentTime >= dayDrawCloseTime) {
-    showToast('❌ Las apuestas para el sorteo de día están cerradas.', 'error');
-    return;
-  }
-
-  if (draw === 'night' && currentTime >= nightDrawCloseTime) {
-    showToast('❌ Las apuestas para el sorteo de noche están cerradas.', 'error');
-    return;
-  }
-
-  if (this.state.currentUser.balance < amount) {
-    showToast('❌ Saldo insuficiente.', 'error');
-    return;
-  }
-
-  const bets = await githubGet('trx_bets');
-
-  const newBet = {
-    id: Date.now(),
-    userId: this.state.currentUser.id,
-    number,
-    amount,
-    draw,
-    date: new Date().toISOString().split('T')[0],
-    status: 'pending',
-  };
-
-  const updatedBets = [...bets, newBet];
-  await githubSet('trx_bets', updatedBets);
-
-  // Descontar saldo al usuario
-  const users = await githubGet('trx_users');
-  const userIndex = users.findIndex(u => u.id === this.state.currentUser.id);
-  if (userIndex !== -1) {
-    users[userIndex].balance -= amount;
-    await githubSet('trx_users', users);
-    this.state.users = users;
-    this.state.currentUser = { ...users[userIndex] };
-  }
-
-  this.state.bets = updatedBets;
-  await this._commit();
-
-  showToast(`✅ Apuesta de ${amount} TRX al número ${number} realizada.`, 'success');
-}
-
-// --- Admin Actions ---
-async setWinningNumber(draw, number) {
-  this.state.lottery[draw] = number;
-
-  // Guardar en GitHub
-  await githubSet('trx_global_winner_' + draw, number);
-
-  const today = new Date().toISOString().split('T')[0];
-
-  // Procesar apuestas y actualizar balances
-  await this.processBetsForDraw(draw, number, today);
-
-  await this._commit();
-
-  showToast(`✅ Número ganador (${draw}) establecido. Premios pagados.`, 'success');
-}
-
-
-   async processBetsForDraw(draw, winningNumber, date) {
-  const bets = await githubGet('trx_bets');
-  const users = await githubGet('trx_users');
-
-  const relevantBets = bets.filter(b => b.draw === draw && b.date === date && b.status === 'pending');
-
-  relevantBets.forEach(bet => {
-    const user = users.find(u => u.id === bet.userId);
-    if (!user) return;
-
-    if (bet.number === winningNumber) {
-      bet.status = 'win';
-      user.balance += bet.amount * 10;
-    } else {
-      bet.status = 'loss';
+    updateUser(updates) {
+        if (!this.state.currentUser) return;
+        let user = this.state.users.find(u => u.id === this.state.currentUser.id);
+        if (user) {
+            Object.assign(user, updates);
+            this.state.currentUser = {...user};
+            this._commit();
+        }
     }
-  });
 
-  await githubSet('trx_bets', bets);
-  await githubSet('trx_users', users);
+    // --- Betting ---
+    placeBet(number, amount, draw) {
+        if (!this.state.currentUser) return;
 
-  this.state.bets = bets;
-  this.state.users = users;
-}
+        const now = new Date();
+        const hours = now.getHours();
+        const minutes = now.getMinutes();
+        const currentTime = hours * 60 + minutes;
+        
+        const dayDrawCloseTime = 13 * 60 + 10; // 1:10 PM
+        const nightDrawCloseTime = 20 * 60 + 10; // 8:10 PM
 
+        if (draw === 'day' && currentTime >= dayDrawCloseTime) {
+            showToast('Las apuestas para el sorteo de día están cerradas.', 'error');
+            return;
+        }
+        if (draw === 'night' && currentTime >= nightDrawCloseTime) {
+            showToast('Las apuestas para el sorteo de noche están cerradas.', 'error');
+            return;
+        }
 
-    async requestDeposit(amount) {
-  if (!this.state.currentUser) return;
+        if (this.state.currentUser.balance < amount) {
+            showToast('Saldo insuficiente.', 'error');
+            return;
+        }
+        
+        const bet = {
+            id: Date.now(),
+            userId: this.state.currentUser.id,
+            number,
+            amount,
+            draw, // 'day' or 'night'
+            date: new Date().toISOString().split('T')[0],
+            status: 'pending', // pending, win, loss
+        };
 
-  const deposits = await githubGet('trx_pending_deposits');
+        this.state.bets.push(bet);
+        this.updateUser({ balance: this.state.currentUser.balance - amount });
+        showToast(`Apuesta de ${amount} TRX al número ${number} realizada.`, 'success');
+        this._commit();
+    }
+    
+    // --- Admin Actions ---
+    setWinningNumber(draw, number) {
+        this.state.lottery[draw] = number;
+localStorage.setItem('trx_global_winner_' + draw, number); // Guardar globalmente
+        const today = new Date().toISOString().split('T')[0];
 
-  const depositRequest = {
-    id: Date.now(),
-    userId: this.state.currentUser.id,
-    username: this.state.currentUser.username,
-    amount,
-    status: 'pending'
-  };
+        // Process bets
+        this.processBetsForDraw(draw, number, today);
+        
+        this._commit();
+        showToast(`Número ganador (${draw}) establecido. Premios pagados.`, 'success');
+    }
 
-  const updatedDeposits = [...deposits, depositRequest];
+    processBetsForDraw(draw, winningNumber, date) {
+        // Find bets for this draw and date
+        const relevantBets = this.state.bets.filter(b => b.draw === draw && b.date === date && b.status === 'pending');
+        
+        relevantBets.forEach(bet => {
+            const user = this.state.users.find(u => u.id === bet.userId);
+            if (!user) return;
 
-  await githubSet('trx_pending_deposits', updatedDeposits);
+            if (bet.number === winningNumber) {
+                bet.status = 'win';
+                user.balance += bet.amount * 10;
+            } else {
+                bet.status = 'loss';
+            }
+        });
+    }
 
-  this.state.pendingDeposits = updatedDeposits;
-  await this._commit();
-}
+    requestDeposit(amount) {
+        if (!this.state.currentUser) return;
+        const depositRequest = {
+            id: Date.now(),
+            userId: this.state.currentUser.id,
+            username: this.state.currentUser.username,
+            amount,
+            status: 'pending'
+        };
+        this.state.pendingDeposits.push(depositRequest);
+        this._commit();
+        // The alert will be replaced by a modal in the UI layer (App class)
+    }
 
-
-    async confirmDeposit(depositId) {
-  const deposits = await githubGet('trx_pending_deposits');
-  const users = await githubGet('trx_users');
-
-  const deposit = deposits.find(d => d.id === depositId);
-  if (!deposit) return;
-
-  const user = users.find(u => u.id === deposit.userId);
-  if (user) {
-    user.balance += deposit.amount;
-  }
-
-  const updatedDeposits = deposits.filter(d => d.id !== depositId);
-
-  await githubSet('trx_pending_deposits', updatedDeposits);
-  await githubSet('trx_users', users);
-
-  this.state.pendingDeposits = updatedDeposits;
-  this.state.users = users;
-
-  await this._commit();
-  showToast('✅ Depósito confirmado.', 'success');
-}
-
-    async requestWithdrawal() {
-  if (!this.state.currentUser) return;
-
-  const amount = parseFloat(prompt("Ingrese la cantidad a retirar:", this.state.currentUser.balance));
-  if (isNaN(amount) || amount <= 0 || amount > this.state.currentUser.balance) {
+    confirmDeposit(depositId) {
+        const deposit = this.state.pendingDeposits.find(d => d.id === depositId);
+        if (!deposit) return;
+        
+        const user = this.state.users.find(u => u.id === deposit.userId);
+        if (user) {
+            user.balance += deposit.amount;
+        }
+        this.state.pendingDeposits = this.state.pendingDeposits.filter(d => d.id !== depositId);
+        this._commit();
+        showToast('Depósito confirmado.', 'success');
+    }
+    
+    requestWithdrawal() {
+        if (!this.state.currentUser) return;
+        const amount = parseFloat(prompt("Ingrese la cantidad a retirar:", this.state.currentUser.balance));
+        if (isNaN(amount) || amount <= 0 || amount > this.state.currentUser.balance) {
             showToast('Monto de retiro inválido.', 'error');
             return;
         }
@@ -383,69 +207,32 @@ async setWinningNumber(draw, number) {
             amount,
             status: 'pending'
         };
-        async requestWithdrawal() {
-  if (!this.state.currentUser) return;
+        this.state.pendingWithdrawals.push(withdrawalRequest);
+        this.updateUser({ balance: this.state.currentUser.balance - amount });
+        this._commit();
+        showToast('Solicitud de retiro enviada.', 'info');
+        alert(`--- SOLICITUD DE RETIRO ENVIADA ---\n\nSu solicitud para retirar ${amount} TRX ha sido enviada.\n\nEl administrador procesará su retiro a la dirección:\n${this.state.currentUser.trxAddress}\n\nEste es un proceso manual y será completado a la brevedad posible. Recibirá los fondos directamente en su billetera.`);
+    }
 
-  const amount = parseFloat(prompt("Ingrese la cantidad a retirar:", this.state.currentUser.balance));
-  if (isNaN(amount) || amount <= 0 || amount > this.state.currentUser.balance) {
-    showToast('❌ Monto de retiro inválido.', 'error');
-    return;
-  }
+    completeWithdrawal(withdrawalId) {
+        const request = this.state.pendingWithdrawals.find(w => w.id === withdrawalId);
+        if(!request) return;
+        
+        request.status = 'completed';
+        // Logic to actually send crypto would go here in a real app
+        // For now, we just update the status. We can filter out completed ones from view.
+        this.state.pendingWithdrawals = this.state.pendingWithdrawals.filter(w => w.id !== withdrawalId);
+        this._commit();
+        showToast('Retiro marcado como completado.', 'success');
+    }
 
-  const withdrawals = await githubGet('trx_pending_withdrawals');
-
-  const withdrawalRequest = {
-    id: Date.now(),
-    userId: this.state.currentUser.id,
-    username: this.state.currentUser.username,
-    trxAddress: this.state.currentUser.trxAddress,
-    amount,
-    status: 'pending'
-  };
-
-  const updatedWithdrawals = [...withdrawals, withdrawalRequest];
-  await githubSet('trx_pending_withdrawals', updatedWithdrawals);
-
-  // Descontar balance y actualizar usuario
-  const users = await githubGet('trx_users');
-  const index = users.findIndex(u => u.id === this.state.currentUser.id);
-  if (index !== -1) {
-    users[index].balance -= amount;
-    await githubSet('trx_users', users);
-    this.state.users = users;
-    this.state.currentUser = { ...users[index] };
-  }
-
-  this.state.pendingWithdrawals = updatedWithdrawals;
-  await this._commit();
-
-  showToast('📤 Solicitud de retiro enviada.', 'info');
-
-  alert(`--- SOLICITUD DE RETIRO ENVIADA ---\n\nSu solicitud para retirar ${amount} TRX ha sido enviada.\n\nEl administrador procesará su retiro a la dirección:\n${this.state.currentUser.trxAddress}\n\nEste es un proceso manual y será completado a la brevedad posible. Recibirá los fondos directamente en su billetera.`);
+    // --- Theme ---
+    toggleTheme() {
+        this.state.theme = this.state.theme === 'dark' ? 'light' : 'dark';
+        document.body.className = `${this.state.theme}-theme`;
+        this._commit();
+    }
 }
-
-
-    // --- Confirmar retiro ---
-async completeWithdrawal(withdrawalId) {
-  const withdrawals = await githubGet('trx_pending_withdrawals');
-  const request = withdrawals.find(w => w.id === withdrawalId);
-  if (!request) return;
-
-  const updatedWithdrawals = withdrawals.filter(w => w.id !== withdrawalId);
-  await githubSet('trx_pending_withdrawals', updatedWithdrawals);
-  this.state.pendingWithdrawals = updatedWithdrawals;
-
-  await this._commit();
-  showToast('✅ Retiro marcado como completado.', 'success');
-}
-
-// --- Theme ---
-toggleTheme() {
-  this.state.theme = this.state.theme === 'dark' ? 'light' : 'dark';
-  document.body.className = `${this.state.theme}-theme`;
-  this._commit();
-}
-
 
 // --- VIEWS / TEMPLATES (using lit-html) ---
 class App {
@@ -481,51 +268,35 @@ class App {
         this.render();
     }
     
-    async handleEvent(e) {
-    e.preventDefault();
-    const { type, target } = e;
-    const action = target.dataset.action;
+    handleEvent(e) {
+        e.preventDefault();
+        const { type, target } = e;
+        const action = target.dataset.action;
 
-    if (type === 'submit') {
-        const formData = new FormData(target);
-        const data = Object.fromEntries(formData.entries());
+        if (type === 'submit') {
+            const formData = new FormData(target);
+            const data = Object.fromEntries(formData.entries());
 
-        switch (target.id) {
-            case 'login-form':
-                this.store.login(data.email, data.password);
-                break;
-
-            case 'register-form':
-                if (data.password !== data.confirmPassword) {
-                    showToast('Las contraseñas no coinciden.', 'error');
-                    return;
-                }
-                if (!data.avatar) {
-                    showToast('Por favor, seleccione un avatar.', 'error');
-                    return;
-                }
-
-                const success = await this.store.register(
-                    data.username,
-                    data.email,
-                    data.password,
-                    data.trxAddress,
-                    data.avatar
-                );
-                if (success) this.store.setCurrentPage('login');
-                break;
-
-            case 'bet-form':
-                this.store.placeBet(
-                    data.number.padStart(2, '0'),
-                    parseInt(data.amount),
-                    data.draw
-                );
-                break;
-        }
-    }
-}
-
+            switch(target.id) {
+                case 'login-form':
+                    this.store.login(data.email, data.password);
+                    break;
+                case 'register-form':
+                    if (data.password !== data.confirmPassword) {
+                        showToast('Las contraseñas no coinciden.', 'error');
+                        return;
+                    }
+                    if (!data.avatar) {
+                        showToast('Por favor, seleccione un avatar.', 'error');
+                        return;
+                    }
+                    const success = this.store.register(data.username, data.email, data.password, data.trxAddress, data.avatar);
+                    if (success) this.store.setCurrentPage('login');
+                    break;
+                case 'bet-form':
+                    this.store.placeBet(data.number.padStart(2, '0'), parseInt(data.amount), data.draw);
+                    break;
+            }
         }
 
         if (type === 'click' && action) {
